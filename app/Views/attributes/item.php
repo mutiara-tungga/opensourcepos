@@ -23,7 +23,7 @@
 <?php foreach ($definition_values as $definition_id => $definition_value) { ?>
 
     <div class="form-group form-group-sm">
-        <?= form_label($definition_value['definition_name'], $definition_value['definition_name'], ['class' => 'control-label col-xs-3']) ?>
+        <?= form_label(esc($definition_value['definition_name']), esc($definition_value['definition_name']), ['class' => 'control-label col-xs-3']) ?>
         <div class="col-xs-8">
             <div class="input-group">
                 <?php
@@ -55,7 +55,7 @@
                         $value = (empty($attribute_value) || empty($attribute_value->attribute_value)) ? $definition_value['selected_value'] : $attribute_value->attribute_value;
                         echo form_input([
                             'name'               => "attribute_links[$definition_id]",
-                            'value'              => $value,
+                            'value'              => esc($value),
                             'class'              => 'form-control valid_chars',
                             'data-definition-id' => $definition_id
                         ]);
@@ -133,7 +133,20 @@
             var result = {};
             $("[name*='attribute_links'").each(function() {
                 var definition_id = $(this).data('definition-id');
-                result[definition_id] = $(this).val();
+                var element = $(this);
+                
+                // For checkboxes, use the visible checkbox, not the hidden input
+                if (element.attr('type') === 'hidden' && element.siblings('input[type="checkbox"]').length > 0) {
+                    // Skip hidden inputs that have a corresponding checkbox
+                    return;
+                }
+                
+                // For checkboxes, get the checked state
+                if (element.attr('type') === 'checkbox') {
+                    result[definition_id] = element.prop('checked') ? '1' : '0';
+                } else {
+                    result[definition_id] = element.val();
+                }
             });
             return result;
         };

@@ -11,12 +11,14 @@ use App\Models\Appconfig;
 use App\Models\Attribute;
 use App\Models\Customer_rewards;
 use App\Models\Dinner_table;
+use App\Models\Item;
 use App\Models\Module;
 use App\Models\Enums\Rounding_mode;
 use App\Models\Stock_location;
 use App\Models\Tax;
 use CodeIgniter\Database\BaseConnection;
 use CodeIgniter\Encryption\EncrypterInterface;
+use CodeIgniter\HTTP\ResponseInterface;
 use Config\Database;
 use Config\OSPOS;
 use Config\Services;
@@ -80,7 +82,7 @@ class Config extends Secure_Controller
         $npmDev = false;
         $license = [];
 
-        $license[$i]['title'] = 'Open Source Point Of Sale ' . config('App')->application_version;
+        $license[$i]['title'] = 'Open Source Point of Sale ' . config('App')->application_version;
 
         if (file_exists('license/LICENSE')) {
             $license[$i]['text'] = file_get_contents('license/LICENSE', false, null, 0, 3000);
@@ -215,18 +217,23 @@ class Config extends Secure_Controller
     }
 
     /**
+     * @return string
      */
-    public function getIndex(): void
+    public function getIndex(): string
     {
+        $data['config'] = $this->config;
         $data['stock_locations'] = $this->stock_location->get_all()->getResultArray();
         $data['dinner_tables'] = $this->dinner_table->get_all()->getResultArray();
         $data['customer_rewards'] = $this->customer_rewards->get_all()->getResultArray();
         $data['support_barcode'] = $this->barcode_lib->get_list_barcodes();
         $data['barcode_fonts'] = $this->barcode_lib->listfonts('fonts');
         $data['logo_exists'] = $this->config['company_logo'] != '';
+        $data['logo_src'] = !empty($this->config['company_logo']) ? base_url('uploads/' . $this->config['company_logo']) : '';
         $data['line_sequence_options'] = $this->sale_lib->get_line_sequence_options();
         $data['register_mode_options'] = $this->sale_lib->get_register_mode_options();
         $data['invoice_type_options'] = $this->sale_lib->get_invoice_type_options();
+        $data['keyboardShortcutOptions'] = $this->sale_lib->getKeyShortcutsOptions();
+        $data['keyboardShortcuts'] = $this->sale_lib->getKeyShortcuts();
         $data['rounding_options'] = rounding_mode::get_rounding_options();
         $data['tax_code_options'] = $this->tax_lib->get_tax_code_options();
         $data['tax_category_options'] = $this->tax_lib->get_tax_category_options();
@@ -272,17 +279,17 @@ class Config extends Secure_Controller
 
         $data['mailchimp']['lists'] = $this->_mailchimp();
 
-        echo view('configs/manage', $data);
+        return view('configs/manage', $data);
     }
 
     /**
      * Saves company information. Used in app/Views/configs/info_config.php
      *
      * @throws ReflectionException
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveInfo(): void
+    public function postSaveInfo(): ResponseInterface
     {
         $upload_data = $this->upload_logo();
         $upload_success = empty($upload_data['error']);
@@ -306,7 +313,7 @@ class Config extends Secure_Controller
         $message = lang('Config.saved_' . ($success ? '' : 'un') . 'successfully');
         $message = $upload_success ? $message : strip_tags($upload_data['error']);
 
-        echo json_encode(['success' => $success, 'message' => $message]);
+        return $this->response->setJSON(['success' => $success, 'message' => $message]);
     }
 
 
@@ -358,11 +365,12 @@ class Config extends Secure_Controller
      * Saves general configuration. Used in app/Views/configs/general_config.php
      *
      * @throws ReflectionException
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveGeneral(): void
+    public function postSaveGeneral(): ResponseInterface
     {
-        $batch_save_data = [
+        $batchSaveData = [
             'theme'                             => $this->request->getPost('theme'),
             'login_form'                        => $this->request->getPost('login_form'),
             'default_sales_discount_type'       => $this->request->getPost('default_sales_discount_type') != null,
@@ -381,9 +389,9 @@ class Config extends Secure_Controller
             'gcaptcha_enable'                   => $this->request->getPost('gcaptcha_enable') != null,
             'gcaptcha_secret_key'               => $this->request->getPost('gcaptcha_secret_key'),
             'gcaptcha_site_key'                 => $this->request->getPost('gcaptcha_site_key'),
-            'suggestions_first_column'          => $this->request->getPost('suggestions_first_column'),
-            'suggestions_second_column'         => $this->request->getPost('suggestions_second_column'),
-            'suggestions_third_column'          => $this->request->getPost('suggestions_third_column'),
+            'suggestions_first_column'          => $this->validateSuggestionsColumn($this->request->getPost('suggestions_first_column'), 'first'),
+            'suggestions_second_column'         => $this->validateSuggestionsColumn($this->request->getPost('suggestions_second_column'), 'other'),
+            'suggestions_third_column'          => $this->validateSuggestionsColumn($this->request->getPost('suggestions_third_column'), 'other'),
             'giftcard_number'                   => $this->request->getPost('giftcard_number'),
             'derive_sale_quantity'              => $this->request->getPost('derive_sale_quantity') != null,
             'multi_pack_enabled'                => $this->request->getPost('multi_pack_enabled') != null,
@@ -393,57 +401,67 @@ class Config extends Secure_Controller
 
         $this->module->set_show_office_group($this->request->getPost('show_office_group') != null);
 
-        if ($batch_save_data['category_dropdown'] == 1) {
-            $definition_data['definition_name'] = 'ospos_category';
-            $definition_data['definition_flags'] = 0;
-            $definition_data['definition_type'] = 'DROPDOWN';
-            $definition_data['definition_id'] = CATEGORY_DEFINITION_ID;
-            $definition_data['deleted'] = 0;
+        $this->db->transStart();
 
-            $this->attribute->save_definition($definition_data, CATEGORY_DEFINITION_ID);
-        } elseif ($batch_save_data['category_dropdown'] == NO_DEFINITION_ID) {
-            $this->attribute->deleteDefinition(CATEGORY_DEFINITION_ID);
+        $attributeSuccess = true;
+        if ($batchSaveData['category_dropdown']) {
+            $definitionData['definition_name'] = 'ospos_category';
+            $definitionData['definition_flags'] = 0;
+            $definitionData['definition_type'] = 'DROPDOWN';
+            $definitionData['definition_id'] = CATEGORY_DEFINITION_ID;
+            $definitionData['deleted'] = 0;
+
+            $attributeSuccess = $this->attribute->saveDefinition($definitionData, CATEGORY_DEFINITION_ID);
+        } elseif ($batchSaveData['category_dropdown'] == NO_DEFINITION_ID) {
+            $attributeSuccess = $this->attribute->deleteDefinition(CATEGORY_DEFINITION_ID);
         }
 
-        $success = $this->appconfig->batch_save($batch_save_data);
+        $success = $attributeSuccess && $this->appconfig->batch_save($batchSaveData);
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        $this->db->transComplete();
+
+        $success = $success && $this->db->transStatus();
+
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
     }
 
     /**
      * Checks a number against the currently selected locale. Used in app/Views/configs/locale_config.php
      *
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postCheckNumberLocale(): void
+    public function postCheckNumberLocale(): ResponseInterface
     {
-        $number_locale = $this->request->getPost('number_locale');
-        $save_number_locale = $this->request->getPost('save_number_locale');
+        $numberLocale = $this->request->getPost('number_locale');
+        $saveNumberLocale = $this->request->getPost('save_number_locale');
+        $postedCurrencySymbol = $this->request->getPost('currency_symbol');
+        $postedCurrencyCode = $this->request->getPost('currency_code');
 
-        $fmt = new NumberFormatter($number_locale, NumberFormatter::CURRENCY);
-        if ($number_locale != $save_number_locale) {
-            $currency_symbol = $fmt->getSymbol(NumberFormatter::CURRENCY_SYMBOL);
-            $currency_code = $fmt->getTextAttribute(NumberFormatter::CURRENCY_CODE);
-            $save_number_locale = $number_locale;
-        } else {
-            $currency_symbol = empty($this->request->getPost('currency_symbol')) ? $fmt->getSymbol(NumberFormatter::CURRENCY_SYMBOL) : $this->request->getPost('currency_symbol');
-            $currency_code = empty($this->request->getPost('currency_code')) ? $fmt->getTextAttribute(NumberFormatter::CURRENCY_CODE) : $this->request->getPost('currency_code');
+        $fmt = new NumberFormatter($numberLocale, NumberFormatter::CURRENCY);
+
+        // Use posted values if provided, otherwise fall back to locale defaults
+        $currencySymbol = $postedCurrencySymbol !== '' ? $postedCurrencySymbol : $fmt->getSymbol(NumberFormatter::CURRENCY_SYMBOL);
+        $currencyCode = $postedCurrencyCode !== '' ? $postedCurrencyCode : $fmt->getTextAttribute(NumberFormatter::CURRENCY_CODE);
+
+        // Update saved locale if it changed
+        if ($numberLocale !== $saveNumberLocale) {
+            $saveNumberLocale = $numberLocale;
         }
 
         if ($this->request->getPost('thousands_separator') == 'false') {
             $fmt->setTextAttribute(NumberFormatter::GROUPING_SEPARATOR_SYMBOL, '');
         }
 
-        $fmt->setSymbol(NumberFormatter::CURRENCY_SYMBOL, $currency_symbol);
-        $number_local_example = $fmt->format(1234567890.12300);
+        $fmt->setSymbol(NumberFormatter::CURRENCY_SYMBOL, $currencySymbol);
+        $numberLocaleExample = $fmt->format(1234567890.12300);
 
-        echo json_encode([
-            'success'               => $number_local_example != false,
-            'save_number_locale'    => $save_number_locale,
-            'number_locale_example' => $number_local_example,
-            'currency_symbol'       => $currency_symbol,
-            'currency_code'         => $currency_code,
+        return $this->response->setJSON([
+            'success'               => $numberLocaleExample != false,
+            'save_number_locale'    => $saveNumberLocale,
+            'number_locale_example' => $numberLocaleExample,
+            'currency_symbol'       => $currencySymbol,
+            'currency_code'         => $currencyCode,
         ]);
     }
 
@@ -451,14 +469,15 @@ class Config extends Secure_Controller
      * Saves locale configuration. Used in app/Views/configs/locale_config.php
      *
      * @throws ReflectionException
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveLocale(): void
+    public function postSaveLocale(): ResponseInterface
     {
         $exploded = explode(":", $this->request->getPost('language'));
+        $currency_symbol = $this->request->getPost('currency_symbol');
         $batch_save_data = [
-            'currency_symbol'       => $this->request->getPost('currency_symbol'),
+            'currency_symbol'       => htmlspecialchars($currency_symbol ?? ''),
             'currency_code'         => $this->request->getPost('currency_code'),
             'language_code'         => $exploded[0],
             'language'              => $exploded[1],
@@ -480,17 +499,17 @@ class Config extends Secure_Controller
 
         $success = $this->appconfig->batch_save($batch_save_data);
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
     }
 
     /**
      * Saves email configuration. Used in app/Views/configs/email_config.php
      *
      * @throws ReflectionException
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveEmail(): void
+    public function postSaveEmail(): ResponseInterface
     {
         $password = '';
 
@@ -498,9 +517,24 @@ class Config extends Secure_Controller
             $password = $this->encrypter->encrypt($this->request->getPost('smtp_pass'));
         }
 
+        $protocol = $this->request->getPost('protocol');
+        $mailpath = $this->request->getPost('mailpath');
+
+        // Validate mailpath: required for sendmail, optional for others but must be safe if provided
+        $isMailpathRequired = ($protocol === 'sendmail');
+        $isMailpathProvided = !empty($mailpath);
+        $isMailpathValid = $isMailpathProvided && preg_match('/^[a-zA-Z0-9_\-\/.]+$/', $mailpath);
+
+        if (($isMailpathRequired && !$isMailpathProvided) || ($isMailpathProvided && !$isMailpathValid)) {
+            return $this->response->setJSON([
+                'success' => false,
+                'message' => lang('Config.mailpath_invalid')
+            ]);
+        }
+
         $batch_save_data = [
-            'protocol'     => $this->request->getPost('protocol'),
-            'mailpath'     => $this->request->getPost('mailpath'),
+            'protocol'     => $protocol,
+            'mailpath'     => $mailpath,
             'smtp_host'    => $this->request->getPost('smtp_host'),
             'smtp_user'    => $this->request->getPost('smtp_user'),
             'smtp_pass'    => $password,
@@ -511,17 +545,17 @@ class Config extends Secure_Controller
 
         $success = $this->appconfig->batch_save($batch_save_data);
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
     }
 
     /**
      * Saves SMS message configuration. Used in app/Views/configs/message_config.php.
      *
      * @throws ReflectionException
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveMessage(): void
+    public function postSaveMessage(): ResponseInterface
     {
         $password = '';
 
@@ -538,7 +572,7 @@ class Config extends Secure_Controller
 
         $success = $this->appconfig->batch_save($batch_save_data);
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
     }
 
     /**
@@ -565,15 +599,15 @@ class Config extends Secure_Controller
     /**
      * Gets Mailchimp lists when a valid API key is inserted. Used in app/Views/configs/integrations_config.php
      *
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postCheckMailchimpApiKey(): void
+    public function postCheckMailchimpApiKey(): ResponseInterface
     {
         $lists = $this->_mailchimp($this->request->getPost('mailchimp_api_key'));
         $success = count($lists) > 0;
 
-        echo json_encode([
+        return $this->response->setJSON([
             'success'         => $success,
             'message'         => lang('Config.mailchimp_key_' . ($success ? '' : 'un') . 'successfully'),
             'mailchimp_lists' => $lists
@@ -584,10 +618,10 @@ class Config extends Secure_Controller
      * Saves Mailchimp configuration. Used in app/Views/configs/integrations_config.php
      *
      * @throws ReflectionException
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveMailchimp(): void
+    public function postSaveMailchimp(): ResponseInterface
     {
         $api_key = '';
         $list_id = '';
@@ -608,56 +642,56 @@ class Config extends Secure_Controller
 
         $success = $this->appconfig->batch_save($batch_save_data);
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
     }
 
     /**
      * Gets all stock locations. Used in app/Views/configs/stock_config.php
      *
-     * @return void
+     * @return string
      * @noinspection PhpUnused
      */
-    public function getStockLocations(): void
+    public function getStockLocations(): string
     {
         $stock_locations = $this->stock_location->get_all()->getResultArray();
 
-        echo view('partial/stock_locations', ['stock_locations' => $stock_locations]);
+        return view('partial/stock_locations', ['stock_locations' => $stock_locations]);
     }
 
     /**
-     * @return void
+     * @return string
      */
-    public function getDinnerTables(): void
+    public function getDinnerTables(): string
     {
         $dinner_tables = $this->dinner_table->get_all()->getResultArray();
 
-        echo view('partial/dinner_tables', ['dinner_tables' => $dinner_tables]);
+        return view('partial/dinner_tables', ['dinner_tables' => $dinner_tables]);
     }
 
 
     /**
      * Gets all tax categories.
      *
-     * @return void
+     * @return string
      */
-    public function ajax_tax_categories(): void    // TODO: Is this function called anywhere in the code?
+    public function ajax_tax_categories(): string    // TODO: Is this function called anywhere in the code?
     {
         $tax_categories = $this->tax->get_all_tax_categories()->getResultArray();
 
-        echo view('partial/tax_categories', ['tax_categories' => $tax_categories]);
+        return view('partial/tax_categories', ['tax_categories' => $tax_categories]);
     }
 
     /**
      * Gets all customer rewards. Used in app/Views/configs/reward_config.php
      *
-     * @return void
+     * @return string
      * @noinspection PhpUnused
      */
-    public function getCustomerRewards(): void
+    public function getCustomerRewards(): string
     {
         $customer_rewards = $this->customer_rewards->get_all()->getResultArray();
 
-        echo view('partial/customer_rewards', ['customer_rewards' => $customer_rewards]);
+        return view('partial/customer_rewards', ['customer_rewards' => $customer_rewards]);
     }
 
     /**
@@ -677,10 +711,10 @@ class Config extends Secure_Controller
     /**
      * Saves stock locations. Used in app/Views/configs/stock_config.php
      *
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveLocations(): void
+    public function postSaveLocations(): ResponseInterface
     {
         $this->db->transStart();
 
@@ -712,17 +746,17 @@ class Config extends Secure_Controller
 
         $success = $this->db->transStatus();
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
     }
 
     /**
      * Saves all dinner tables. Used in app/Views/configs/table_config.php
      *
      * @throws ReflectionException
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveTables(): void
+    public function postSaveTables(): ResponseInterface
     {
         $this->db->transStart();
 
@@ -759,17 +793,17 @@ class Config extends Secure_Controller
 
         $success = $this->db->transStatus();
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
     }
 
     /**
      * Saves tax configuration. Used in app/Views/configs/tax_config.php
      *
      * @throws ReflectionException
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveTax(): void
+    public function postSaveTax(): ResponseInterface
     {
         $default_tax_1_rate = $this->request->getPost('default_tax_1_rate');
         $default_tax_2_rate = $this->request->getPost('default_tax_2_rate');
@@ -791,17 +825,17 @@ class Config extends Secure_Controller
 
         $message = lang('Config.saved_' . ($success ? '' : 'un') . 'successfully');
 
-        echo json_encode(['success' => $success, 'message' => $message]);
+        return $this->response->setJSON(['success' => $success, 'message' => $message]);
     }
 
     /**
      * Saves customer rewards configuration. Used in app/Views/configs/reward_config.php
      *
-     * @throws ReflectionException
-     * @return void
-     * @noinspection PhpUnused
-     */
-    public function postSaveRewards(): void
+      * @throws ReflectionException
+      * @return ResponseInterface
+      * @noinspection PhpUnused
+      */
+    public function postSaveRewards(): ResponseInterface
     {
         $this->db->transStart();
 
@@ -845,17 +879,17 @@ class Config extends Secure_Controller
 
         $success = $this->db->transStatus();
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
     }
 
     /**
      * Saves barcode configuration. Used in app/Views/configs/barcode_config.php
      *
      * @throws ReflectionException
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveBarcode(): void
+    public function postSaveBarcode(): ResponseInterface
     {
         $batch_save_data = [
             'barcode_type'              => $this->request->getPost('barcode_type'),
@@ -877,20 +911,22 @@ class Config extends Secure_Controller
 
         $success = $this->appconfig->batch_save($batch_save_data);
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
     }
 
     /**
      * Saves receipt configuration. Used in app/Views/configs/receipt_config.php.
      *
      * @throws ReflectionException
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveReceipt(): void
+    public function postSaveReceipt(): ResponseInterface
     {
         $batch_save_data = [
-            'receipt_template'              => $this->request->getPost('receipt_template'),
+            'receipt_template'              => Sale_lib::isValidReceiptTemplate($this->request->getPost('receipt_template'))
+                ? $this->request->getPost('receipt_template')
+                : 'receipt_default',
             'receipt_font_size'             => $this->request->getPost('receipt_font_size', FILTER_SANITIZE_NUMBER_INT),
             'print_delay_autoreturn'        => $this->request->getPost('print_delay_autoreturn', FILTER_SANITIZE_NUMBER_INT),
             'email_receipt_check_behaviour' => $this->request->getPost('email_receipt_check_behaviour'),
@@ -912,17 +948,55 @@ class Config extends Secure_Controller
 
         $success = $this->appconfig->batch_save($batch_save_data);
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+    }
+
+    /**
+     * Saves keyboard shortcut bindings.
+     *
+     * @return ResponseInterface
+     * @noinspection PhpUnused
+     */
+    public function postSaveShortcuts(): ResponseInterface
+    {
+        $allowedShortcuts = array_keys($this->sale_lib->getKeyShortcutsOptions());
+        $currentShortcuts = $this->sale_lib->getKeyShortcuts();
+        $batchSaveData = [];
+
+        foreach ($currentShortcuts as $name => $shortcut) {
+            $postedValue = trim((string)$this->request->getPost('key_' . $name));
+
+            if (!in_array($postedValue, $allowedShortcuts, true)) {
+                $postedValue = $shortcut['value'];
+            }
+
+            $batchSaveData['key_' . $name] = $postedValue;
+        }
+
+        $duplicateValues = array_filter(array_count_values($batchSaveData), static fn(int $count): bool => $count > 1);
+        if (!empty($duplicateValues)) {
+            return $this->response->setJSON([
+                'success' => false,
+                'message' => lang('Config.shortcuts_duplicate_bindings')
+            ]);
+        }
+
+        $success = $this->appconfig->batch_save($batchSaveData);
+
+        return $this->response->setJSON([
+            'success' => $success,
+            'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')
+        ]);
     }
 
     /**
      * Saves invoice configuration. Used in app/Views/configs/invoice_config.php.
      *
      * @throws ReflectionException
-     * @return void
+     * @return ResponseInterface
      * @noinspection PhpUnused
      */
-    public function postSaveInvoice(): void
+    public function postSaveInvoice(): ResponseInterface
     {
         $batch_save_data = [
             'invoice_enable'              => $this->request->getPost('invoice_enable') != null,
@@ -938,7 +1012,9 @@ class Config extends Secure_Controller
             'work_order_enable'           => $this->request->getPost('work_order_enable') != null,
             'work_order_format'           => $this->request->getPost('work_order_format'),
             'last_used_work_order_number' => $this->request->getPost('last_used_work_order_number', FILTER_SANITIZE_NUMBER_INT),
-            'invoice_type'                => $this->request->getPost('invoice_type')
+            'invoice_type'                => Sale_lib::isValidInvoiceType($this->request->getPost('invoice_type')) 
+                ? $this->request->getPost('invoice_type') 
+                : 'invoice'
         ];
 
         $success = $this->appconfig->batch_save($batch_save_data);
@@ -953,20 +1029,42 @@ class Config extends Secure_Controller
             }
         }
 
-        echo json_encode(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
+        return $this->response->setJSON(['success' => $success, 'message' => lang('Config.saved_' . ($success ? '' : 'un') . 'successfully')]);
     }
 
     /**
      * Removes the company logo from the database. Used in app/Views/configs/info_config.php.
      *
-     * @return void
+     * @return ResponseInterface
      * @throws ReflectionException
      * @noinspection PhpUnused
      */
-    public function postRemoveLogo(): void
+    public function postRemoveLogo(): ResponseInterface
     {
         $success = $this->appconfig->save(['company_logo' => '']);
 
-        echo json_encode(['success' => $success]);
+        return $this->response->setJSON(['success' => $success]);
+    }
+
+    /**
+     * Validates suggestions column configuration to prevent SQL injection.
+     *
+     * @param mixed $column The column value from POST
+     * @param string $fieldType Either 'first' or 'other' to determine default fallback
+     * @return string Validated column name
+     */
+    private function validateSuggestionsColumn(mixed $column, string $fieldType): string
+    {
+        if (!is_string($column)) {
+            return $fieldType === 'first' ? 'name' : '';
+        }
+
+        $allowed = $fieldType === 'first' 
+            ? Item::ALLOWED_SUGGESTIONS_COLUMNS 
+            : Item::ALLOWED_SUGGESTIONS_COLUMNS_WITH_EMPTY;
+
+        $fallback = $fieldType === 'first' ? 'name' : '';
+
+        return in_array($column, $allowed, true) ? $column : $fallback;
     }
 }

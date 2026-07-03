@@ -65,12 +65,15 @@ class Filters extends BaseFilters
      * List of filter aliases that are always
      * applied before and after every request.
      *
-     * @var array<string, array<string, array<string, string>>>|array<string, list<string>>
+     * @var array{
+     *     before: array<string, array{except: list<string>|string}>|list<string>,
+     *     after: array<string, array{except: list<string>|string}>|list<string>
+     * }
      */
     public array $globals = [
         'before' => [
             'honeypot',
-            'csrf' => ['except' => 'login'],
+            'csrf' => ['except' => 'login|migrate'],
             'invalidchars',
         ],
         'after' => [
@@ -105,4 +108,20 @@ class Filters extends BaseFilters
      * @var array<string, array<string, list<string>>>
      */
     public array $filters = [];
+
+    /**
+     * Constructor to conditionally disable CSRF filter in testing environment
+     */
+    public function __construct()
+    {
+        // Check for testing environment via env variable or constant
+        $isTesting = ($_ENV['CI_ENVIRONMENT'] ?? $_SERVER['CI_ENVIRONMENT'] ?? getenv('CI_ENVIRONMENT')) === 'testing'
+            || (defined('ENVIRONMENT') && ENVIRONMENT === 'testing');
+
+        // Remove CSRF filter from globals in testing environment
+        if ($isTesting) {
+            // Remove the 'csrf' key from $globals['before'] while preserving array structure
+            $this->globals['before'] = array_filter($this->globals['before'], static fn($key) => $key !== 'csrf', ARRAY_FILTER_USE_KEY);
+        }
+    }
 }

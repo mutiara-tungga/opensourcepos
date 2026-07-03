@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Models\Expense;
 use App\Models\Expense_category;
+use CodeIgniter\HTTP\ResponseInterface;
 use Config\OSPOS;
 use Config\Services;
 
@@ -23,7 +24,7 @@ class Expenses extends Secure_Controller
     /**
      * @return void
      */
-    public function getIndex(): void
+    public function getIndex(): string
     {
         $data['table_headers'] = get_expenses_manage_table_headers();
 
@@ -37,13 +38,16 @@ class Expenses extends Secure_Controller
             'is_deleted'  => lang('Expenses.is_deleted')
         ];
 
-        echo view('expenses/manage', $data);
+        // Restore filters from URL
+        $data = array_merge($data, restoreTableFilters($this->request));
+
+        return view('expenses/manage', $data);
     }
 
     /**
      * @return void
      */
-    public function getSearch(): void
+    public function getSearch(): ResponseInterface
     {
         $search   = $this->request->getGet('search');
         $limit    = $this->request->getGet('limit', FILTER_SANITIZE_NUMBER_INT);
@@ -78,27 +82,34 @@ class Expenses extends Secure_Controller
             $data_rows[] = get_expenses_data_last_row($expenses);
         }
 
-        echo json_encode(['total' => $total_rows, 'rows' => $data_rows, 'payment_summary' => $payment_summary]);
+        return $this->response->setJSON(['total' => $total_rows, 'rows' => $data_rows, 'payment_summary' => $payment_summary]);
     }
 
     /**
      * @param int $expense_id
      * @return void
      */
-    public function getView(int $expense_id = NEW_ENTRY): void
+    public function getView(int $expense_id = NEW_ENTRY): string
     {
         $data = [];    // TODO: Duplicated code
 
-        $data['employees'] = [];
-        foreach ($this->employee->get_all()->getResult() as $employee) {
-            foreach (get_object_vars($employee) as $property => $value) {
-                $employee->$property = $value;
-            }
-
-            $data['employees'][$employee->person_id] = $employee->first_name . ' ' . $employee->last_name;
-        }
-
         $data['expenses_info'] = $this->expense->get_info($expense_id);
+        $expense_id = $data['expenses_info']->expense_id;
+
+        $current_employee_id = $this->employee->get_logged_in_employee_info()->person_id;
+        $can_assign_employee = $this->employee->has_grant('employees', $current_employee_id);
+
+        $data['employees'] = [];
+        if ($can_assign_employee) {
+            foreach ($this->employee->get_all()->getResult() as $employee) {
+                $data['employees'][$employee->person_id] = $employee->first_name . ' ' . $employee->last_name;
+            }
+        } else {
+            $stored_employee_id = $expense_id == NEW_ENTRY ? $current_employee_id : $data['expenses_info']->employee_id;
+            $stored_employee = $this->employee->get_info($stored_employee_id);
+            $data['employees'][$stored_employee_id] = $stored_employee->first_name . ' ' . $stored_employee->last_name;
+        }
+        $data['can_assign_employee'] = $can_assign_employee;
 
         $expense_categories = [];
         foreach ($this->expense_category->get_all(0, 0, true)->getResultArray() as $row) {
@@ -106,11 +117,9 @@ class Expenses extends Secure_Controller
         }
         $data['expense_categories'] = $expense_categories;
 
-        $expense_id = $data['expenses_info']->expense_id;
-
         if ($expense_id == NEW_ENTRY) {
             $data['expenses_info']->date = date('Y-m-d H:i:s');
-            $data['expenses_info']->employee_id = $this->employee->get_logged_in_employee_info()->person_id;
+            $data['expenses_info']->employee_id = $current_employee_id;
         }
 
         $data['payments'] = [];
@@ -125,31 +134,45 @@ class Expenses extends Secure_Controller
         // Don't allow gift card to be a payment option in a sale transaction edit because it's a complex change
         $data['payment_options'] = $this->expense->get_payment_options();
 
-        echo view("expenses/form", $data);
+        return view("expenses/form", $data);
     }
 
     /**
      * @param int $row_id
-     * @return void
+     * @return ResponseInterface
      */
-    public function getRow(int $row_id): void
+    public function getRow(int $row_id): ResponseInterface
     {
         $expense_info = $this->expense->get_info($row_id);
         $data_row = get_expenses_data_row($expense_info);
 
-        echo json_encode($data_row);
+        return $this->response->setJSON($data_row);
     }
 
     /**
      * @param int $expense_id
-     * @return void
+     * @return ResponseInterface
      */
-    public function postSave(int $expense_id = NEW_ENTRY): void
+    public function postSave(int $expense_id = NEW_ENTRY): ResponseInterface
     {
         $config = config(OSPOS::class)->settings;
         $newdate = $this->request->getPost('date', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
 
         $date_formatter = date_create_from_format($config['dateformat'] . ' ' . $config['timeformat'], $newdate);
+
+        $current_employee_id = $this->employee->get_logged_in_employee_info()->person_id;
+        $submitted_employee_id = $this->request->getPost('employee_id', FILTER_SANITIZE_NUMBER_INT);
+
+        if (!$this->employee->has_grant('employees', $current_employee_id)) {
+            if ($expense_id == NEW_ENTRY) {
+                $employee_id = $current_employee_id;
+            } else {
+                $existing_expense = $this->expense->get_info($expense_id);
+                $employee_id = $existing_expense->employee_id;
+            }
+        } else {
+            $employee_id = $submitted_employee_id;
+        }
 
         $expense_data = [
             'date'                => $date_formatter->format('Y-m-d H:i:s'),
@@ -160,33 +183,33 @@ class Expenses extends Secure_Controller
             'payment_type'        => $this->request->getPost('payment_type', FILTER_SANITIZE_FULL_SPECIAL_CHARS),
             'expense_category_id' => $this->request->getPost('expense_category_id', FILTER_SANITIZE_NUMBER_INT),
             'description'         => $this->request->getPost('description', FILTER_SANITIZE_FULL_SPECIAL_CHARS),
-            'employee_id'         => $this->request->getPost('employee_id', FILTER_SANITIZE_NUMBER_INT),
+            'employee_id'         => $employee_id,
             'deleted'             => $this->request->getPost('deleted') != null
         ];
 
         if ($this->expense->save_value($expense_data, $expense_id)) {
             // New Expense
             if ($expense_id == NEW_ENTRY) {
-                echo json_encode(['success' => true, 'message' => lang('Expenses.successful_adding'), 'id' => $expense_data['expense_id']]);
+                return $this->response->setJSON(['success' => true, 'message' => lang('Expenses.successful_adding'), 'id' => $expense_data['expense_id']]);
             } else { // Existing Expense
-                echo json_encode(['success' => true, 'message' => lang('Expenses.successful_updating'), 'id' => $expense_id]);
+                return $this->response->setJSON(['success' => true, 'message' => lang('Expenses.successful_updating'), 'id' => $expense_id]);
             }
         } else { // Failure
-            echo json_encode(['success' => false, 'message' => lang('Expenses.error_adding_updating'), 'id' => NEW_ENTRY]);
+            return $this->response->setJSON(['success' => false, 'message' => lang('Expenses.error_adding_updating'), 'id' => NEW_ENTRY]);
         }
     }
 
     /**
-     * @return void
+     * @return ResponseInterface
      */
-    public function postDelete(): void
+    public function postDelete(): ResponseInterface
     {
         $expenses_to_delete = $this->request->getPost('ids', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
 
         if ($this->expense->delete_list($expenses_to_delete)) {
-            echo json_encode(['success' => true, 'message' => lang('Expenses.successful_deleted') . ' ' . count($expenses_to_delete) . ' ' . lang('Expenses.one_or_multiple'), 'ids' => $expenses_to_delete]);
+            return $this->response->setJSON(['success' => true, 'message' => lang('Expenses.successful_deleted') . ' ' . count($expenses_to_delete) . ' ' . lang('Expenses.one_or_multiple'), 'ids' => $expenses_to_delete]);
         } else {
-            echo json_encode(['success' => false, 'message' => lang('Expenses.cannot_be_deleted'), 'ids' => $expenses_to_delete]);
+            return $this->response->setJSON(['success' => false, 'message' => lang('Expenses.cannot_be_deleted'), 'ids' => $expenses_to_delete]);
         }
     }
 }

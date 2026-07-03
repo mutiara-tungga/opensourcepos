@@ -25,7 +25,7 @@ class MY_Migration extends MigrationRunner
     public function get_latest_migration(): int
     {
         $migrations = $this->findMigrations();
-        return basename(end($migrations)->version);
+        return (int) basename(end($migrations)->version);
     }
 
     /**
@@ -35,11 +35,18 @@ class MY_Migration extends MigrationRunner
      */
     public static function get_current_version(): int
     {
-        $db = Database::connect();
-        if ($db->tableExists('migrations')) {
-            $builder = $db->table('migrations');
-            $builder->select('version')->orderBy('version', 'DESC')->limit(1);
-            return $builder->get()->getRow()->version;
+        try {
+            $db = Database::connect();
+            if ($db->tableExists('migrations')) {
+                $builder = $db->table('migrations');
+                $builder->select('version')->orderBy('version', 'DESC')->limit(1);
+                $result = $builder->get()->getRow();
+                return $result ? (int) $result->version : 0;
+            }
+        } catch (\Exception $e) {
+            // Database not available yet (e.g. fresh install before schema).
+            // Catches mysqli_sql_exception which is not a DatabaseException.
+            return 0;
         }
 
         return 0;
@@ -63,10 +70,16 @@ class MY_Migration extends MigrationRunner
      */
     private function ci3_migrations_exists(): bool|string
     {
-        if ($this->db->tableExists('migrations') && !$this->db->fieldExists('id', 'migrations')) {
-            $builder = $this->db->table('migrations');
-            $builder->select('version');
-            return $builder->get()->getRow()->version;
+        try {
+            if ($this->db->tableExists('migrations') && !$this->db->fieldExists('id', 'migrations')) {
+                $builder = $this->db->table('migrations');
+                $builder->select('version');
+                $result = $builder->get()->getRow();
+                return $result ? $result->version : false;
+            }
+        } catch (\Exception $e) {
+            // Database not available yet (e.g. fresh install before schema).
+            // Catches mysqli_sql_exception which is not a DatabaseException.
         }
 
         return false;
@@ -143,4 +156,5 @@ class MY_Migration extends MigrationRunner
 
         $this->ensureTable();
     }
+
 }

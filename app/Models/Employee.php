@@ -4,6 +4,7 @@ namespace App\Models;
 
 use CodeIgniter\Database\ResultInterface;
 use CodeIgniter\Session\Session;
+use stdClass;
 
 /**
  * Employee class
@@ -407,7 +408,7 @@ class Employee extends Person
     /**
      * Gets information about the currently logged in employee.
      */
-    public function get_logged_in_employee_info()
+    public function get_logged_in_employee_info(): float|false|array|int|string|stdClass|null
     {
         if ($this->is_logged_in()) {
             return $this->get_info($this->session->get('person_id'));
@@ -533,5 +534,42 @@ class Employee extends Person
         }
 
         return $success;
+    }
+
+    /**
+     * Checks if the employee has admin privileges (all module permissions).
+     * The first employee (person_id = 1) is considered admin by default.
+     */
+    public function isAdmin(int $person_id): bool
+    {
+        if ($person_id === 1) {
+            return true;
+        }
+
+        foreach (ADMIN_MODULES as $module) {
+            if (!$this->has_grant($module, $person_id)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Checks if current user can modify target employee.
+     * Only admins can modify other admin accounts.
+     * Users cannot modify their own grants unless they are admin.
+     */
+    public function canModifyEmployee(int $target_person_id, int $current_person_id): bool
+    {
+        if ($target_person_id === $current_person_id) {
+            return !$this->isAdmin($target_person_id) || $this->isAdmin($current_person_id);
+        }
+
+        if ($this->isAdmin($target_person_id) && !$this->isAdmin($current_person_id)) {
+            return false;
+        }
+
+        return true;
     }
 }

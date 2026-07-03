@@ -23,7 +23,7 @@
                     'name'  => 'definition_name',
                     'id'    => 'definition_name',
                     'class' => 'form-control input-sm',
-                    'value' => $definition_info->definition_name
+                    'value' => esc($definition_info->definition_name)
                 ]) ?>
             </div>
         </div>
@@ -69,7 +69,7 @@
                 <div class="input-group">
                     <?= form_input([
                         'name'  => 'definition_unit',
-                        'value' => $definition_info->definition_unit,
+                        'value' => esc($definition_info->definition_unit),
                         'class' => 'form-control input-sm',
                         'id'    => 'definition_unit'
                     ]) ?>
@@ -192,7 +192,7 @@
                 }
             }
 
-            $('#definition_list_group').append('<li class="list-group-item">' + value + '<a href="javascript:void(0);"><span class="glyphicon glyphicon-trash pull-right"></span></a></li>')
+            $('#definition_list_group').append('<li class="list-group-item">' + DOMPurify.sanitize(value) + '<a href="javascript:void(0);"><span class="glyphicon glyphicon-trash pull-right"></span></a></li>')
                 .find(':last-child a').click(remove_attribute_value);
             $('#definition_value').val('');
         };

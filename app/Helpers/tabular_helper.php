@@ -5,6 +5,7 @@ use App\Models\Employee;
 use App\Models\Item_taxes;
 use App\Models\Tax_category;
 use CodeIgniter\Database\ResultInterface;
+use CodeIgniter\HTTP\IncomingRequest;
 use CodeIgniter\Session\Session;
 use Config\OSPOS;
 use Config\Services;
@@ -48,7 +49,7 @@ function transform_headers(array $headers, bool $readonly = false, bool $editabl
             'field'      => key($element),
             'title'      => current($element),
             'switchable' => $element['switchable'] ?? !preg_match('(^$|&nbsp)', current($element)),
-            'escape'     => !preg_match("/(edit|email|messages|item_pic|customer_name|note)/", key($element)) && !(isset($element['escape']) && !$element['escape']),
+            'escape'     => !preg_match("/(edit|email|messages|item_pic)/", key($element)) && !(isset($element['escape']) && !$element['escape']),
             'sortable'   => $element['sortable'] ?? current($element) != '',
             'checkbox'   => $element['checkbox'] ?? false,
             'class'      => isset($element['checkbox']) || preg_match('(^$|&nbsp)', current($element)) ? 'print_hide' : '',
@@ -225,7 +226,7 @@ function get_person_data_row(object $person): array
         'people.person_id' => $person->person_id,
         'last_name'        => $person->last_name,
         'first_name'       => $person->first_name,
-        'email'            => empty($person->email) ? '' : mailto($person->email, $person->email),
+        'email'            => empty($person->email) ? '' : mailto(esc($person->email), esc($person->email)),
         'phone_number'     => $person->phone_number,
         'messages'         => empty($person->phone_number)
             ? ''
@@ -291,7 +292,7 @@ function get_customer_data_row(object $person, object $stats): array
         'people.person_id' => $person->person_id,
         'last_name'        => $person->last_name,
         'first_name'       => $person->first_name,
-        'email'            => empty($person->email) ? '' : mailto($person->email, $person->email),
+        'email'            => empty($person->email) ? '' : mailto(esc($person->email), esc($person->email)),
         'phone_number'     => $person->phone_number,
         'total'            => to_currency($stats->total),
         'messages'         => empty($person->phone_number)
@@ -362,7 +363,7 @@ function get_supplier_data_row(object $supplier): array
         'category'         => $supplier->category,
         'last_name'        => $supplier->last_name,
         'first_name'       => $supplier->first_name,
-        'email'            => empty($supplier->email) ? '' : mailto($supplier->email, $supplier->email),
+        'email'            => empty($supplier->email) ? '' : mailto(esc($supplier->email), esc($supplier->email)),
         'phone_number'     => $supplier->phone_number,
         'messages'         => empty($supplier->phone_number)
             ? ''
@@ -408,7 +409,7 @@ function get_items_manage_table_headers(): string
 {
     $attribute = model(Attribute::class);
     $config = config(OSPOS::class)->settings;
-    $definition_names = $attribute->get_definitions_by_flags($attribute::SHOW_IN_ITEMS);    // TODO: this should be made into a constant in constants.php
+    $definitionsWithTypes = $attribute->get_definitions_by_flags($attribute::SHOW_IN_ITEMS, true);
 
     $headers = item_headers();
 
@@ -420,8 +421,8 @@ function get_items_manage_table_headers(): string
 
     $headers[] = ['item_pic' => lang('Items.image'), 'sortable' => false];
 
-    foreach ($definition_names as $definition_id => $definition_name) {
-        $headers[] = [$definition_id => $definition_name, 'sortable' => false];
+    foreach ($definitionsWithTypes as $definition_id => $definitionInfo) {
+        $headers[] = [$definition_id => $definitionInfo['name'], 'sortable' => false];
     }
 
     $headers[] = ['inventory' => '', 'escape' => false];
@@ -470,7 +471,8 @@ function get_item_data_row(object $item): array
             : glob("./uploads/item_pics/$item->pic_filename");
 
         if (sizeof($images) > 0) {
-            $image .= '<a class="rollover" href="' . base_url($images[0]) . '"><img alt="Image thumbnail" src="' . site_url('items/PicThumb/' . pathinfo($images[0], PATHINFO_BASENAME)) . '"></a>';
+            $image_path = ltrim($images[0], './');
+            $image .= '<a class="rollover" href="' . base_url(implode('/', array_map('rawurlencode', explode('/', $image_path)))) . '"><img alt="Image thumbnail" src="' . site_url('items/PicThumb/' . rawurlencode(pathinfo($images[0], PATHINFO_BASENAME))) . '"></a>';
         }
     }
 
@@ -478,7 +480,7 @@ function get_item_data_row(object $item): array
         $item->name .= NAME_SEPARATOR . $item->pack_name;
     }
 
-    $definition_names = $attribute->get_definitions_by_flags($attribute::SHOW_IN_ITEMS);
+    $definition_names = $attribute->get_definitions_by_flags($attribute::SHOW_IN_ITEMS, true);
 
     $columns = [
         'items.item_id' => $item->item_id,
@@ -576,8 +578,8 @@ function item_kit_headers(): array
         ['item_kit_number'  => lang('Item_kits.item_kit_number')],
         ['name'             => lang('Item_kits.name')],
         ['description'      => lang('Item_kits.description')],
-        ['total_cost_price' => lang('Items.cost_price'), 'sortable' => FALSE],
-        ['total_unit_price' => lang('Items.unit_price'), 'sortable' => FALSE]
+        ['total_cost_price' => lang('Items.cost_price'), 'sortable' => false],
+        ['total_unit_price' => lang('Items.unit_price'), 'sortable' => false]
     ];
 }
 
@@ -633,7 +635,7 @@ function parse_attribute_values(array $columns, array $row): array
 }
 
 /**
- * @param array $definition_names
+ * @param array $definition_names Array of definition_id => ['name' => name, 'type' => type] or definition_id => name
  * @param array $row
  * @return array
  */
@@ -650,10 +652,16 @@ function expand_attribute_values(array $definition_names, array $row): array
     }
 
     $attribute_values = [];
-    foreach ($definition_names as $definition_id => $definition_name) {
+    foreach ($definition_names as $definition_id => $definitionInfo) {
         if (isset($indexed_values[$definition_id])) {
-            $attribute_value = $indexed_values[$definition_id];
-            $attribute_values["$definition_id"] = $attribute_value;
+            $raw_value = $indexed_values[$definition_id];
+
+            // Format DECIMAL attributes according to locale
+            if (is_array($definitionInfo) && isset($definitionInfo['type']) && $definitionInfo['type'] === DECIMAL) {
+                $attribute_values["$definition_id"] = to_decimals($raw_value);
+            } else {
+                $attribute_values["$definition_id"] = $raw_value;
+            }
         } else {
             $attribute_values["$definition_id"] = "";
         }
@@ -735,7 +743,7 @@ function get_expense_category_manage_table_headers(): string
 }
 
 /**
- * Gets the html data row for the expenses category
+ * Gets the html data row for the expense category
  */
 function get_expense_category_data_row(object $expense_category): array
 {
@@ -834,7 +842,7 @@ function get_expenses_data_last_row(object $expense): array
 }
 
 /**
- * Get the expenses payments summary
+ * Get the expense payments summary
  */
 function get_expenses_manage_payments_summary(array $payments, ResultInterface $expenses): string    // TODO: $expenses is passed but never used.
 {
@@ -923,4 +931,25 @@ function get_controller(): string
     $controller_name = strtolower($router->controllerName());
     $controller_name_parts = explode('\\', $controller_name);
     return end($controller_name_parts);
+}
+
+/**
+ * Restores filter values from the URL query string.
+ *
+ * @param IncomingRequest $request The request object
+ * @return array Array with 'start_date', 'end_date', and 'selected_filters' keys
+ */
+function restoreTableFilters(IncomingRequest $request): array
+{
+    $startDate = $request->getGet('start_date', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+    $endDate = $request->getGet('end_date', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+    $urlFilters = $request->getGet('filters', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+
+    return array_filter([
+        'start_date' => $startDate ?: null,
+        'end_date' => $endDate ?: null,
+        'selected_filters' => $urlFilters ?? []
+    ], function ($value) {
+        return $value !== null && $value !== [];
+    });
 }
