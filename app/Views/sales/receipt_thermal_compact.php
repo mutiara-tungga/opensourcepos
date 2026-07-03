@@ -15,7 +15,7 @@
 
     .item-name {
         font-weight: 400;
-        /* text-transform: uppercase; */
+        text-transform: uppercase;
     }
 
     .item-meta {
@@ -103,12 +103,12 @@
                         <div style="font-size: <?= $config['receipt_font_size'] ?>px; color: #666;">
                             <?= to_receipt_quantity($item['quantity']) ?>
                             ×
-                            <?= to_currency($item['price']) ?>
+                            <?= to_currency_without_symbol($item['price']) ?>
                         </div>
                     </td>
 
                     <td class="total-value style=" text-align:right;">
-                        <?= to_currency($item[($config['receipt_show_total_discount'] ? 'total' : 'discounted_total')]) ?></td>
+                        <?= to_currency_without_symbol($item[($config['receipt_show_total_discount'] ? 'total' : 'discounted_total')]) ?></td>
 
                 </tr>
                 <?php if ($item['discount'] > 0) { ?>
@@ -118,7 +118,7 @@
                                 (
                                 <?php if ($item['discount_type'] == FIXED) { ?>
                                     @
-                                    <?= to_currency($item['discount']) . " " . lang('Sales.discount') ?>
+                                    <?= to_currency_without_symbol($item['discount']) . " " . lang('Sales.discount') ?>
                                 <?php } elseif ($item['discount_type'] == PERCENT) { ?>
                                     <?= to_decimals($item['discount']) . " " . lang('Sales.discount_included') ?>
                                 <?php } ?>
@@ -127,7 +127,7 @@
                         </td>
 
                         <td class="total-value" style="text-align:right;">
-                            <?= to_currency($item['discounted_total'] - $item['total']) ?>
+                            <?= to_currency_without_symbol($item['discounted_total'] - $item['total']) ?>
                         </td>
                     </tr>
                 <?php } ?>
@@ -143,16 +143,16 @@
         <!-- SUBTOTAL -->
         <!-- <tr> -->
         <!-- <td><?= lang('Sales.sub_total') ?></td> -->
-        <!-- <td style="text-align:right"><?= to_currency($subtotal) ?></td> -->
+        <!-- <td style="text-align:right"><?= to_currency_without_symbol($subtotal) ?></td> -->
         <!-- </tr> -->
         <?php if ($config['receipt_show_total_discount'] && $discount > 0) { ?>
             <tr>
                 <td style="border-top: 2px solid #000000;"><?= lang('Sales.sub_total') ?></td>
-                <td style="text-align: right; border-top:2px solid #000000;"><?= to_currency($prediscount_subtotal) ?></td>
+                <td style="text-align: right; border-top:2px solid #000000;"><?= to_currency_without_symbol($prediscount_subtotal) ?></td>
             </tr>
             <tr>
                 <td><?= lang('Sales.customer_discount') ?>:</td>
-                <td class="total-value"><?= to_currency($discount * -1) ?></td>
+                <td class="total-value"><?= to_currency_without_symbol($discount * -1) ?></td>
             </tr>
         <?php } ?>
 
@@ -176,7 +176,7 @@
             <td style="font-weight:bold;<?= $border ? ' border-top: 2px solid black;' : '' ?>">
                 <?= lang('Sales.total') ?></td>
             <td style="text-align:right;font-weight:bold;<?= $border ? ' border-top: 2px solid black;' : '' ?>">
-                <?= to_currency($total) ?>
+                <?= to_currency_without_symbol($total) ?>
             </td>
         </tr>
 
@@ -198,7 +198,7 @@
             <tr>
                 <td><?= $splitpayment[0] ?></td>
                 <td style="text-align:right">
-                    <?= to_currency($payment['payment_amount'] * -1) ?>
+                    <?= to_currency_without_symbol($payment['payment_amount'] * -1) ?>
                 </td>
             </tr>
         <?php endforeach; ?>
@@ -208,7 +208,7 @@
             <tr>
                 <td><?= lang('Sales.giftcard_balance') ?></td>
                 <td style="text-align:right">
-                    <?= to_currency($cur_giftcard_value) ?>
+                    <?= to_currency_without_symbol($cur_giftcard_value) ?>
                 </td>
             </tr>
         <?php endif; ?>
@@ -223,7 +223,7 @@
                 ) ?>
             </td>
             <td style="text-align:right">
-                <?= to_currency($amount_change) ?>
+                <?= to_currency_without_symbol($amount_change) ?>
             </td>
         </tr>
 
