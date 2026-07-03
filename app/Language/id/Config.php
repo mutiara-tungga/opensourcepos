@@ -259,6 +259,7 @@ return [
     'receipt_category' => "",
     'receipt_configuration' => "Struk Print Settings",
     'receipt_default' => "Default",
+    'receipt_thermal_compact' => "Termal Compact",
     'receipt_font_size' => "Ukuran Font",
     'receipt_font_size_number' => "Ukuran font harus berupa angka.",
     'receipt_font_size_required' => "Ukuran font harus diisi.",
