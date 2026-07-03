@@ -446,6 +446,7 @@ function to_receipt_quantity(?string $number): string
  *
  * @param string|null $decimals
  * @param int $type
+ * @param bool $show_symbol
  * @return string
  */
 function to_decimals(
