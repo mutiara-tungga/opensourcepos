@@ -18,7 +18,8 @@
                         'receipt_template',
                         [
                             'receipt_default' => lang('Config.receipt_default'),
-                            'receipt_short'   => lang('Config.receipt_short')
+                            'receipt_short'   => lang('Config.receipt_short'),
+                            'receipt_thermal_compact' => lang('Config.receipt_thermal_compact')
                         ],
                         $config['receipt_template'],
                         'class="form-control input-sm"'

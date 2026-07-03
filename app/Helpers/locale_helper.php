@@ -363,6 +363,15 @@ function to_currency(?string $number): string
  * @param string|null $number
  * @return string
  */
+function to_currency_without_symbol(?string $number): string
+{
+    return to_decimals($number, 'currency_decimals', NumberFormatter::CURRENCY, false);
+}
+
+/**
+ * @param string|null $number
+ * @return string
+ */
 function to_currency_no_money(?string $number): string
 {
     return to_decimals($number, 'currency_decimals');
@@ -413,14 +422,39 @@ function to_quantity_decimals(?string $number): string
 }
 
 /**
+ * Format quantity untuk receipt.
+ * Bilangan bulat ditampilkan tanpa desimal,
+ * bilangan pecahan tetap mengikuti setting quantity_decimals.
+ */
+function to_receipt_quantity(?string $number): string
+{
+    if (!isset($number)) {
+        return '';
+    }
+
+    $value = (float) $number;
+
+    if (floor($value) == $value) {
+        return number_format($value, 0, '.', '');
+    }
+
+    return to_decimals($number, 'quantity_decimals');
+}
+
+/**
  * Converts a string to locale-specific number format for display.
  *
  * @param string|null $decimals
  * @param int $type
+ * @param bool $show_symbol
  * @return string
  */
-function to_decimals(?string $number, ?string $decimals = null, int $type = NumberFormatter::DECIMAL): string
-{
+function to_decimals(
+    ?string $number,
+    ?string $decimals = null,
+    int $type = NumberFormatter::DECIMAL,
+    bool $show_symbol = true
+): string {
     if (!isset($number)) {
         return '';
     }
@@ -433,7 +467,12 @@ function to_decimals(?string $number, ?string $decimals = null, int $type = Numb
     if (empty($config['thousands_separator'])) {
         $fmt->setTextAttribute(NumberFormatter::GROUPING_SEPARATOR_SYMBOL, '');
     }
-    $fmt->setSymbol(NumberFormatter::CURRENCY_SYMBOL, $config['currency_symbol']);
+
+    if ($show_symbol) {
+        $fmt->setSymbol(NumberFormatter::CURRENCY_SYMBOL, $config['currency_symbol']);
+    } else {
+        $fmt->setSymbol(NumberFormatter::CURRENCY_SYMBOL, '');
+    }
 
     return $fmt->format((float) $number);
 }
